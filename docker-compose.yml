@@ -1,0 +1,298 @@
+# version: "3.9"
+
+x-common-env: &common_env
+  NETWORK_ID: "11337"
+  PERIOD: "1"
+  EPOCH: "30000"
+  SIGNERS: "5"
+  P2P_NET_PREFIX: "172.28.0."
+
+services:
+  postgres:
+    image: postgres:16.10-trixie
+    environment:
+      POSTGRES_PASSWORD: secret
+      POSTGRES_USER: clique
+      POSTGRES_DB: clique
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/00_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U clique -d clique"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  kafka:
+    image: bitnami/kafka:3.8.0
+    environment:
+      - KAFKA_ENABLE_KRAFT=yes
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    ports: ["9092:9092"]
+    volumes:
+      - kafkadata:/bitnami/kafka
+
+  init:
+    build: ./init
+    environment:
+      <<: *common_env
+    volumes:
+      - chain:/chain
+      - signer1_data:/nodes/signer1
+      - signer2_data:/nodes/signer2
+      - signer3_data:/nodes/signer3
+      - signer4_data:/nodes/signer4
+      - signer5_data:/nodes/signer5
+    depends_on:
+      - kafka
+      - postgres
+
+  signer1:
+    image: ethereum/client-go:v1.13.15
+    container_name: signer1
+    entrypoint: ["/chain/bin/run-signer.sh"]
+    command: ["signer1"]
+    environment: *common_env
+    volumes:
+      - chain:/chain:ro
+      - signer1_data:/data
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks:
+      p2p:
+        ipv4_address: 172.28.0.11
+
+  signer2:
+    image: ethereum/client-go:v1.13.15
+    container_name: signer2
+    entrypoint: ["/chain/bin/run-signer.sh"]
+    command: ["signer2"]
+    environment: *common_env
+    volumes:
+      - chain:/chain:ro
+      - signer2_data:/data
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks:
+      p2p:
+        ipv4_address: 172.28.0.12
+
+  signer3:
+    image: ethereum/client-go:v1.13.15
+    container_name: signer3
+    entrypoint: ["/chain/bin/run-signer.sh"]
+    command: ["signer3"]
+    environment: *common_env
+    volumes:
+      - chain:/chain:ro
+      - signer3_data:/data
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks:
+      p2p:
+        ipv4_address: 172.28.0.13
+
+  signer4:
+    image: ethereum/client-go:v1.13.15
+    container_name: signer4
+    entrypoint: ["/chain/bin/run-signer.sh"]
+    command: ["signer4"]
+    environment: *common_env
+    volumes:
+      - chain:/chain:ro
+      - signer4_data:/data
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks:
+      p2p:
+        ipv4_address: 172.28.0.14
+
+  signer5:
+    image: ethereum/client-go:v1.13.15
+    container_name: signer5
+    entrypoint: ["/chain/bin/run-signer.sh"]
+    command: ["signer5"]
+    environment: *common_env
+    volumes:
+      - chain:/chain:ro
+      - signer5_data:/data
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks:
+      p2p:
+        ipv4_address: 172.28.0.15
+
+  chaos_signer1:
+    build: ./chaos
+    network_mode: "container:signer1"
+    cap_add: ["NET_ADMIN"]
+    environment:
+      MODE: "delay"
+      BLOCK_TARGETS: "172.28.0.12,172.28.0.13,172.28.0.14,172.28.0.15"
+      ON_SEC: "${DELAY_ON}"
+      OFF_SEC: "${DELAY_OFF}"
+    depends_on:
+      - signer1
+
+  chaos_signer2:
+    build: ./chaos
+    network_mode: "container:signer2"
+    cap_add: ["NET_ADMIN"]
+    environment:
+      MODE: "delay"
+      BLOCK_TARGETS: "172.28.0.11,172.28.0.13,172.28.0.14,172.28.0.15"
+      ON_SEC: "${DELAY_ON}"
+      OFF_SEC: "${DELAY_OFF}"
+    depends_on:
+      - signer2
+
+  chaos_signer3:
+    build: ./chaos
+    network_mode: "container:signer3"
+    cap_add: ["NET_ADMIN"]
+    environment:
+      MODE: "delay"
+      BLOCK_TARGETS: "172.28.0.11,172.28.0.12,172.28.0.14,172.28.0.15"
+      ON_SEC: "${DELAY_ON}"
+      OFF_SEC: "${DELAY_OFF}"
+    depends_on:
+      - signer3
+
+  chaos_signer4:
+    build: ./chaos
+    network_mode: "container:signer4"
+    cap_add: ["NET_ADMIN"]
+    environment:
+      MODE: "delay"
+      BLOCK_TARGETS: "172.28.0.11,172.28.0.12,172.28.0.13,172.28.0.15"
+      ON_SEC: "${DELAY_ON}"
+      OFF_SEC: "${DELAY_OFF}"
+    depends_on:
+      - signer4
+
+  chaos_signer5:
+    build: ./chaos
+    network_mode: "container:signer5"
+    cap_add: ["NET_ADMIN"]
+    environment:
+      MODE: "delay"
+      BLOCK_TARGETS: "172.28.0.11,172.28.0.12,172.28.0.13,172.28.0.14"
+      ON_SEC: "${DELAY_ON}"
+      OFF_SEC: "${DELAY_OFF}"
+    depends_on:
+      - signer5
+
+  listener_signer1:
+    build: ./listener
+    environment:
+      NODE_ID: signer1
+      WS_URL: ws://signer1:8546
+      KAFKA_BROKERS: kafka:9092
+      TOPIC: block-headers
+    networks: [ default, p2p ]
+    depends_on:
+      - kafka
+      - signer1
+
+  listener_signer2:
+    build: ./listener
+    environment:
+      NODE_ID: signer2
+      WS_URL: ws://signer2:8546
+      KAFKA_BROKERS: kafka:9092
+      TOPIC: block-headers
+    networks: [ default, p2p ]
+    depends_on:
+      - kafka
+      - signer2
+
+  listener_signer3:
+    build: ./listener
+    environment:
+      NODE_ID: signer3
+      WS_URL: ws://signer3:8546
+      KAFKA_BROKERS: kafka:9092
+      TOPIC: block-headers
+    networks: [ default, p2p ]
+    depends_on:
+      - kafka
+      - signer3
+
+  listener_signer4:
+    build: ./listener
+    environment:
+      NODE_ID: signer4
+      WS_URL: ws://signer4:8546
+      KAFKA_BROKERS: kafka:9092
+      TOPIC: block-headers
+    networks: [ default, p2p ]
+    depends_on:
+      - kafka
+      - signer4
+
+  listener_signer5:
+    build: ./listener
+    environment:
+      NODE_ID: signer5
+      WS_URL: ws://signer5:8546
+      KAFKA_BROKERS: kafka:9092
+      TOPIC: block-headers
+    networks: [ default, p2p ]
+    depends_on:
+      - kafka
+      - signer5
+
+  pgwriter:
+    build: ./pgwriter
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      TOPIC: block-headers
+      GROUP_ID: pgwriter-1
+      PG_DSN: postgresql://clique:secret@postgres:5432/clique
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+
+  forkwatcher:
+    build: ./forkwatcher
+    environment:
+      PG_DSN: postgresql://clique:secret@postgres:5432/clique
+      POLL_SEC: "2"
+      LOG_TOP_BRANCHES: "5"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  kafkadata:
+  chain:
+  signer1_data:
+  signer2_data:
+  signer3_data:
+  signer4_data:
+  signer5_data:
+
+networks:
+  p2p:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
