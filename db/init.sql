@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS fork_snapshots (
   anchor_hash     text        NOT NULL,
   anchor_number   bigint      NOT NULL,
   depth           int         NOT NULL,
+  experiment_id   text,
+  run_id          text,
   PRIMARY KEY (snapshot_at, anchor_hash)
 );
 
@@ -38,3 +40,20 @@ CREATE INDEX IF NOT EXISTS fork_snapshots_anchor_idx
 
 CREATE INDEX IF NOT EXISTS fork_snapshots_headnum_idx
   ON fork_snapshots(head_number);
+
+-- ALTER TABLE IF EXISTS fork_snapshots
+--   ADD COLUMN IF NOT EXISTS experiment_id text,
+--   ADD COLUMN IF NOT EXISTS run_id text;
+
+CREATE INDEX IF NOT EXISTS idx_fork_snapshots_exp_run
+  ON fork_snapshots (experiment_id, run_id);
+
+-- Таблица для "текущего" run_id на кампанию
+CREATE TABLE IF NOT EXISTS current_run (
+  experiment_id text PRIMARY KEY,
+  run_id text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- upsert helper (на случай старых версий psql можно и plain UPSERT)
+-- пример: INSERT ... ON CONFLICT (experiment_id) DO UPDATE SET ...

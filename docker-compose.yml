@@ -275,6 +275,7 @@ services:
       PG_DSN: postgresql://clique:secret@postgres:5432/clique
       POLL_SEC: "2"
       LOG_TOP_BRANCHES: "5"
+      EXPERIMENT_ID: goptuna-run-001
     depends_on:
       postgres:
         condition: service_healthy

@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"os"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -134,9 +136,89 @@ FROM anchors a
 LEFT JOIN depth_per_anchor d ON d.anchor = a.hash;
 `
 
+const qSnapshot2 = `
+WITH RECURSIVE
+params AS (
+  SELECT
+    $1::int  AS k,
+    $2::text AS experiment_id,
+    $3::text AS run_id
+),
+head AS (
+  SELECT b.hash, b.number
+  FROM blocks b
+  ORDER BY b.number DESC, b.hash DESC
+  LIMIT 1
+),
+canonical AS (
+  SELECT b.hash, b.parent_hash, b.number
+  FROM blocks b
+  WHERE b.hash = (SELECT hash FROM head)
+  UNION ALL
+  SELECT p.hash, p.parent_hash, p.number
+  FROM blocks p
+  JOIN canonical c ON p.hash = c.parent_hash
+),
+finalized_height AS (
+  SELECT GREATEST((SELECT number FROM head) - (SELECT k FROM params), 0) AS h
+),
+anchors AS (
+  SELECT hash, number
+  FROM canonical
+  WHERE number <= (SELECT h FROM finalized_height)
+),
+noncanon AS (
+  SELECT b.hash, b.parent_hash, b.number
+  FROM blocks b
+  LEFT JOIN canonical c ON c.hash = b.hash
+  WHERE c.hash IS NULL
+),
+paths AS (
+  SELECT n.hash, n.parent_hash, n.number,
+         n.parent_hash AS anchor,
+         1::int AS depth
+  FROM noncanon n
+  WHERE n.parent_hash IN (SELECT hash FROM anchors)
+  UNION ALL
+  SELECT n.hash, n.parent_hash, n.number,
+         p.anchor,
+         p.depth + 1
+  FROM noncanon n
+  JOIN paths p ON n.parent_hash = p.hash
+),
+depth_per_anchor AS (
+  SELECT anchor, MAX(depth) AS depth
+  FROM paths
+  GROUP BY anchor
+)
+INSERT INTO fork_snapshots (
+  snapshot_at, head_hash, head_number,
+  anchor_hash, anchor_number, depth,
+  experiment_id, run_id
+)
+SELECT
+  now() AS snapshot_at,
+  (SELECT hash   FROM head)  AS head_hash,
+  (SELECT number FROM head)  AS head_number,
+  a.hash   AS anchor_hash,
+  a.number AS anchor_number,
+  COALESCE(d.depth, 0) AS depth,
+  (SELECT experiment_id FROM params),
+  (SELECT run_id        FROM params)
+FROM anchors a
+LEFT JOIN depth_per_anchor d ON d.anchor = a.hash;
+`
+
 func main() {
 	dsn := mustEnv("PG_DSN", "postgresql://clique:secret@postgres:5432/clique")
 	poll := mustEnv("POLL_SEC", "2")
+	experimentID := mustEnv("EXPERIMENT_ID", "default-exp")
+	kFinal := mustEnv("FINALITY_K", "64")
+	kVal, err := strconv.Atoi(kFinal)
+	if err != nil {
+		log.Fatalf("invalid FINALITY_K: %v", err)
+	}
+
 	interval, err := time.ParseDuration(poll + "s")
 	if err != nil || interval <= 0 {
 		interval = 2 * time.Second
@@ -161,7 +243,34 @@ func main() {
 		// 		log.Println(string(b))
 		// 		prev = rows
 		// 	}
-		_, err = db.Exec(ctx, qSnapshot)
+
+		log.Printf("Start")
+
+		var runID string
+		err := db.QueryRow(ctx, `
+		  SELECT run_id
+		  FROM current_run
+		  WHERE experiment_id = $1
+		`, experimentID).Scan(&runID)
+		if err != nil {
+			// Если run_id пока нет — просто подождём
+			log.Printf("no run_id yet for experiment %q: %v", experimentID, err)
+			time.Sleep(interval)
+			continue
+		}
+
+		re := regexp.MustCompile(`\$(\d+)`)
+		matches := re.FindAllStringSubmatch(qSnapshot, -1)
+		maxN := 0
+		for _, m := range matches {
+			if n, _ := strconv.Atoi(m[1]); n > maxN {
+				maxN = n
+			}
+		}
+		log.Printf("qSnapshot placeholders: $%d; args: 3 (kVal=%d, exp=%s, run=%s)", maxN, kVal, experimentID, runID)
+
+		log.Printf("kVal %v run_id %v experimentID %v ", kVal, experimentID, runID)
+		_, err = db.Exec(ctx, qSnapshot2, kVal, experimentID, runID)
 		if err != nil {
 			log.Printf("SQL error: %v", err)
 		}
@@ -169,24 +278,24 @@ func main() {
 	}
 }
 
-func fetchDistribution(ctx context.Context, db *pgxpool.Pool) ([]DistRow, int, error) {
-	rs, err := db.Query(ctx, qDistribution)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rs.Close()
-
-	rows := make([]DistRow, 0, 8)
-	maxDepth := 0
-	for rs.Next() {
-		var r DistRow
-		if err := rs.Scan(&r.Depth, &r.Branches, &r.Percent); err != nil {
-			return nil, 0, err
-		}
-		rows = append(rows, r)
-		if r.Depth > maxDepth {
-			maxDepth = r.Depth
-		}
-	}
-	return rows, maxDepth, rs.Err()
-}
+// func fetchDistribution(ctx context.Context, db *pgxpool.Pool) ([]DistRow, int, error) {
+// 	rs, err := db.Query(ctx, qDistribution)
+// 	if err != nil {
+// 		return nil, 0, err
+// 	}
+// 	defer rs.Close()
+//
+// 	rows := make([]DistRow, 0, 8)
+// 	maxDepth := 0
+// 	for rs.Next() {
+// 		var r DistRow
+// 		if err := rs.Scan(&r.Depth, &r.Branches, &r.Percent); err != nil {
+// 			return nil, 0, err
+// 		}
+// 		rows = append(rows, r)
+// 		if r.Depth > maxDepth {
+// 			maxDepth = r.Depth
+// 		}
+// 	}
+// 	return rows, maxDepth, rs.Err()
+// }
