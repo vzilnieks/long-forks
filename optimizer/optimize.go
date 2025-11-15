@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	PG_DSN           = os.Getenv("PG_DSN")        // e.g. postgres://user:pass@db:5432/longforks?sslmode=disable
-	EXPERIMENT_ID    = os.Getenv("EXPERIMENT_ID") // e.g. goptuna-run-001
+	PG_DSN           = os.Getenv("PG_DSN")
+	EXPERIMENT_ID    = os.Getenv("EXPERIMENT_ID")
 	CHAOS_CONTAINERS = []string{
 		"docker-bayese-chaos_signer1-1",
 		"docker-bayese-chaos_signer2-1",
@@ -26,7 +26,6 @@ var (
 	}
 )
 
-// Обновляет current_run: ставит текущий run_id для кампании experiment_id
 func setCurrentRun(db *sql.DB, experimentID, runID string) error {
 	_, err := db.Exec(`
 	  INSERT INTO current_run(experiment_id, run_id, updated_at)
@@ -37,7 +36,6 @@ func setCurrentRun(db *sql.DB, experimentID, runID string) error {
 	return err
 }
 
-// Чистка хвостов по этому run_id (повторные запуски)
 func purgeSnapshotsForRun(db *sql.DB, experimentID, runID string) error {
 	_, err := db.Exec(`
 	  DELETE FROM fork_snapshots
@@ -46,13 +44,6 @@ func purgeSnapshotsForRun(db *sql.DB, experimentID, runID string) error {
 	return err
 }
 
-// Метрика на основе твоей агрегации:
-//  1. вычисляем per-anchor "закрытие" при финальности K=64:
-//     head_number >= anchor_number + 64 внутри исторического окна этого run_id
-//  2. для "закрытых" якорей берём достигнутую максимальную глубину
-//  3. возвращаем:
-//     - expected_depth (устойчивее к шуму)
-//     - max_depth (для логов и контроля)
 func measureExpectedAndMaxDepth(db *sql.DB, experimentID, runID string) (expected float64, maxDepth float64, err error) {
 	q := `
 WITH per_anchor_closed AS (
@@ -90,7 +81,7 @@ prob AS (
 agg AS (
   SELECT
     COALESCE(MAX(l.max_depth_reached), 0) AS max_depth,
-    -- матожидание глубины: сумма P(depth >= n) по n>=1
+    -- total P(depth >= n) on n>=1
     COALESCE(SUM(CASE WHEN depth_at_least >= 1 THEN anchors_ge/NULLIF(total,0) ELSE 0 END), 0) AS expected_depth
   FROM prob
   CROSS JOIN lifespan l
@@ -112,11 +103,9 @@ func runCmd(name string, args ...string) error {
 }
 
 func dockerComposeUp() error {
-	// Поднять окружение (если уже поднято — ничего страшного)
 	if err := runCmd("docker-compose", "up", "--build", "-d"); err != nil {
 		return err
 	}
-	// Небольшая пауза
 	time.Sleep(5 * time.Second)
 	return nil
 }
@@ -149,8 +138,6 @@ func deleteTC(container string) {
 }
 
 func measureMaxForkLength(db *sql.DB, experimentID string) (float64, error) {
-	// TODO: адаптируйте под вашу схему/таблицу
-	// Например, если у вас есть таблица forks(experiment_id, fork_length, created_at)
 	var maxLen sql.NullFloat64
 	err := db.QueryRow(`
 		SELECT MAX(fork_length)
@@ -168,16 +155,15 @@ func measureMaxForkLength(db *sql.DB, experimentID string) (float64, error) {
 
 func objective(t goptuna.Trial) (float64, error) {
 
-	// Диапазоны — подстройте при необходимости
-	X, err := t.SuggestInt("X", 1, 120) // секунды "включено"
+	X, err := t.SuggestInt("X", 1, 120)
 	if err != nil {
 		return 0, err
 	}
-	Y, err := t.SuggestInt("Y", 0, 120) // секунды "выключено"
+	Y, err := t.SuggestInt("Y", 0, 120)
 	if err != nil {
 		return 0, err
 	}
-	tcDelayBase, err := t.SuggestInt("tcDelayBase", 100, 3000) // мс
+	tcDelayBase, err := t.SuggestInt("tcDelayBase", 100, 3000) // ms
 	if err != nil {
 		return 0, err
 	}
@@ -190,7 +176,6 @@ func objective(t goptuna.Trial) (float64, error) {
 		return 0, err
 	}
 
-	// run_id для этого триала
 	runNumber, err := t.Number()
 	if err != nil {
 		return 0, err
@@ -200,29 +185,25 @@ func objective(t goptuna.Trial) (float64, error) {
 	log.Printf("Trial params: X=%d Y=%d base=%dms jitter=%dms prob=%.2f",
 		X, Y, tcDelayBase, tcDelayJitter, tcProbability)
 
-	// Подготовка БД и актуализация run_id для watcher'а
 	db, err := sql.Open("postgres", PG_DSN)
 	if err != nil {
 		return 0, fmt.Errorf("open db: %w", err)
 	}
 	defer db.Close()
 
-	// if err := purgeSnapshotsForRun(db, EXPERIMENT_ID, runID); err != nil {
-	// 	log.Printf("[WARN] purge run snapshots: %v", err)
-	// }
+	if err := purgeSnapshotsForRun(db, EXPERIMENT_ID, runID); err != nil {
+		log.Printf("[WARN] purge run snapshots: %v", err)
+	}
 	if err := setCurrentRun(db, EXPERIMENT_ID, runID); err != nil {
 		return 0, fmt.Errorf("setCurrentRun: %w", err)
 	}
 
-	// Небольшая пауза, чтобы watcher прочитал current_run
 	time.Sleep(10 * time.Second)
 
-	// Длительность эксперимента в рамках одного trial
-	runDuration := 5 * 60 * time.Second // увеличьте при необходимости
+	runDuration := 5 * 60 * time.Second
 	endAt := time.Now().Add(runDuration)
 
 	for time.Now().Before(endAt) {
-		// Включаем хаос
 		for _, c := range CHAOS_CONTAINERS {
 			if err := applyTC(c, tcDelayBase, tcDelayJitter, tcProbability); err != nil {
 				log.Printf("[WARN] applyTC(%s): %v", c, err)
@@ -230,14 +211,12 @@ func objective(t goptuna.Trial) (float64, error) {
 		}
 		time.Sleep(time.Duration(X) * time.Second)
 
-		// Выключаем хаос
 		for _, c := range CHAOS_CONTAINERS {
 			deleteTC(c)
 		}
 		time.Sleep(time.Duration(Y) * time.Second)
 	}
 
-	// Чуть подождать, чтобы писатели успели синхронизировать метрики
 	time.Sleep(2 * time.Second)
 
 	expDepth, maxDepth, err := measureExpectedAndMaxDepth(db, EXPERIMENT_ID, runID)
@@ -245,7 +224,6 @@ func objective(t goptuna.Trial) (float64, error) {
 		return 0, fmt.Errorf("measure metric: %w", err)
 	}
 	log.Printf("Trial result: expected_depth=%.4f, max_depth=%.0f", expDepth, maxDepth)
-	// Оптимизируем по expected_depth — он устойчивее к шуму
 	return expDepth, nil
 
 	// db, err := sql.Open("postgres", PG_DSN)
@@ -279,7 +257,6 @@ func main() {
 
 	nTrials := 10
 
-	// Убедиться, что всё поднято
 	if err := dockerComposeUp(); err != nil {
 		log.Fatalf("compose up: %v", err)
 	}

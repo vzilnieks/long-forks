@@ -253,7 +253,7 @@ func main() {
 		  WHERE experiment_id = $1
 		`, experimentID).Scan(&runID)
 		if err != nil {
-			// Если run_id пока нет — просто подождём
+			// wait for run_id
 			log.Printf("no run_id yet for experiment %q: %v", experimentID, err)
 			time.Sleep(interval)
 			continue

@@ -143,8 +143,6 @@ services:
     environment:
       MODE: "delay"
       BLOCK_TARGETS: "172.28.0.12,172.28.0.13,172.28.0.14,172.28.0.15"
-      ON_SEC: "${DELAY_ON}"
-      OFF_SEC: "${DELAY_OFF}"
     depends_on:
       - signer1
 
@@ -155,8 +153,6 @@ services:
     environment:
       MODE: "delay"
       BLOCK_TARGETS: "172.28.0.11,172.28.0.13,172.28.0.14,172.28.0.15"
-      ON_SEC: "${DELAY_ON}"
-      OFF_SEC: "${DELAY_OFF}"
     depends_on:
       - signer2
 
@@ -167,8 +163,6 @@ services:
     environment:
       MODE: "delay"
       BLOCK_TARGETS: "172.28.0.11,172.28.0.12,172.28.0.14,172.28.0.15"
-      ON_SEC: "${DELAY_ON}"
-      OFF_SEC: "${DELAY_OFF}"
     depends_on:
       - signer3
 
@@ -179,8 +173,6 @@ services:
     environment:
       MODE: "delay"
       BLOCK_TARGETS: "172.28.0.11,172.28.0.12,172.28.0.13,172.28.0.15"
-      ON_SEC: "${DELAY_ON}"
-      OFF_SEC: "${DELAY_OFF}"
     depends_on:
       - signer4
 
@@ -191,8 +183,6 @@ services:
     environment:
       MODE: "delay"
       BLOCK_TARGETS: "172.28.0.11,172.28.0.12,172.28.0.13,172.28.0.14"
-      ON_SEC: "${DELAY_ON}"
-      OFF_SEC: "${DELAY_OFF}"
     depends_on:
       - signer5
 

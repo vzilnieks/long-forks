@@ -48,12 +48,9 @@ CREATE INDEX IF NOT EXISTS fork_snapshots_headnum_idx
 CREATE INDEX IF NOT EXISTS idx_fork_snapshots_exp_run
   ON fork_snapshots (experiment_id, run_id);
 
--- Таблица для "текущего" run_id на кампанию
 CREATE TABLE IF NOT EXISTS current_run (
   experiment_id text PRIMARY KEY,
   run_id text NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- upsert helper (на случай старых версий psql можно и plain UPSERT)
--- пример: INSERT ... ON CONFLICT (experiment_id) DO UPDATE SET ...
