@@ -15,6 +15,7 @@ services:
       POSTGRES_USER: clique
       POSTGRES_DB: clique
     ports: ["5432:5432"]
+    networks: [ default, p2p ]
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/00_init.sql:ro
@@ -45,6 +46,24 @@ services:
     ports: ["9092:9092"]
     volumes:
       - kafkadata:/tmp/kraft-combined-logs
+
+  kafka-init:
+    image: apache/kafka:3.8.0
+    user: root
+    command:
+      - /bin/sh
+      - -c
+      - |
+        until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1; do
+          sleep 1
+        done
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+          --create --if-not-exists \
+          --topic block-headers \
+          --partitions 1 \
+          --replication-factor 1
+    depends_on:
+      - kafka
 
   init:
     build: ./init
@@ -210,8 +229,10 @@ services:
       TOPIC: block-headers
     networks: [ default, p2p ]
     depends_on:
-      - kafka
-      - signer1
+      kafka-init:
+        condition: service_completed_successfully
+      signer1:
+        condition: service_started
 
   listener_signer2:
     build: ./listener
@@ -222,8 +243,10 @@ services:
       TOPIC: block-headers
     networks: [ default, p2p ]
     depends_on:
-      - kafka
-      - signer2
+      kafka-init:
+        condition: service_completed_successfully
+      signer2:
+        condition: service_started
 
   listener_signer3:
     build: ./listener
@@ -234,8 +257,10 @@ services:
       TOPIC: block-headers
     networks: [ default, p2p ]
     depends_on:
-      - kafka
-      - signer3
+      kafka-init:
+        condition: service_completed_successfully
+      signer3:
+        condition: service_started
 
   listener_signer4:
     build: ./listener
@@ -246,8 +271,10 @@ services:
       TOPIC: block-headers
     networks: [ default, p2p ]
     depends_on:
-      - kafka
-      - signer4
+      kafka-init:
+        condition: service_completed_successfully
+      signer4:
+        condition: service_started
 
   listener_signer5:
     build: ./listener
@@ -258,8 +285,10 @@ services:
       TOPIC: block-headers
     networks: [ default, p2p ]
     depends_on:
-      - kafka
-      - signer5
+      kafka-init:
+        condition: service_completed_successfully
+      signer5:
+        condition: service_started
 
   pgwriter:
     build: ./pgwriter
@@ -271,8 +300,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      kafka:
-        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
 
   forkwatcher:
     build: ./forkwatcher
